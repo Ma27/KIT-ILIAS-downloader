@@ -1,6 +1,7 @@
 use anyhow::{Context, Result, anyhow};
 use futures_util::stream::TryStreamExt;
 use ignore::gitignore::Gitignore;
+use indicatif::ProgressBar;
 use lazy_static::lazy_static;
 use parking_lot::Mutex;
 use regex::Regex;
@@ -85,21 +86,27 @@ lazy_static!{
 	static ref TASKS_RUNNING: Mutex<usize> = Mutex::default();
 
 	static ref PANIC_HOOK: Mutex<Box<dyn Fn(&panic::PanicInfo) + Sync + Send + 'static>> = Mutex::new(Box::new(|_| {}));
+
+	static ref PROGRESS_BAR: Mutex<ProgressBar> = Mutex::new(ProgressBar::new(1));
 }
 
 fn process_gracefully(ilias: Arc<ILIAS>, path: PathBuf, obj: Object) -> impl Future<Output = ()> + Send { async move {
 	*TASKS_QUEUED.lock() += 1;
+	PROGRESS_BAR.lock().inc_length(1);
 	loop {
 		{ // limit scope of lock
 			let mut running = TASKS_RUNNING.lock();
 			if *running < ilias.opt.jobs {
 				*running += 1;
+				let progress = PROGRESS_BAR.lock();
+				progress.inc(1);
 				break;
 			}
 		}
 		tokio::time::delay_for(Duration::from_millis(50)).await;
 	}
 	let path_text = path.to_string_lossy().into_owned();
+	PROGRESS_BAR.lock().set_message(&path_text);
 	if let Err(e) = process(ilias, path, obj).await.context("failed to process URL") {
 		println!("Syncing {}: {:?}", path_text, e);
 	}
